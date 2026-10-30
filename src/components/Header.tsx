@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
-import { Volume2, VolumeX, Settings, ShieldCheck, History, Sparkles, HelpCircle } from 'lucide-react';
+import { Volume2, VolumeX, Settings, ShieldCheck, History, Sparkles, Gamepad2, Scan } from 'lucide-react';
 import type { SupportedLanguage } from '../utils/speechService';
+import { triggerHaptic } from '../utils/haptics';
 
 interface HeaderProps {
   language: SupportedLanguage;
@@ -10,6 +11,8 @@ interface HeaderProps {
   onOpenSettings: () => void;
   onOpenHistory: () => void;
   historyCount: number;
+  isGameMode: boolean;
+  setIsGameMode: (game: boolean) => void;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -20,85 +23,82 @@ export const Header: React.FC<HeaderProps> = ({
   onOpenSettings,
   onOpenHistory,
   historyCount,
+  isGameMode,
+  setIsGameMode,
 }) => {
   const [showSecurityTooltip, setShowSecurityTooltip] = useState(false);
 
-  const titles = {
-    kz: { name: 'БұлНе?', subtitle: 'Көріп, танып, айтады', secure: '100% Қауіпсіз' },
-    ru: { name: 'BulNe?', subtitle: 'Видит, распознает и говорит', secure: '100% Безопасно' },
-    en: { name: 'BulNe?', subtitle: 'Scans, identifies & speaks', secure: '100% Private' },
-  };
-
   const securityInfo = {
-    kz: 'Бейне ағыны құрылғыңыздан ешқайда жіберілмейді. Барлық есептеулер жергілікті түрде (браузердің ішінде WebGL арқылы) өңделеді.',
-    ru: 'Видеопоток с камеры не отправляется на сторонние серверы. Вся обработка происходит локально на вашем устройстве внутри браузера.',
-    en: 'Camera feed stays on your device. All object detection neural network inferences run 100% locally in your browser via WebGL.',
+    kz: '100% Қауіпсіз: камера деректері құрылғыңыздан ешқайда жіберілмейді (WebGL).',
+    ru: '100% Безопасно: видео обрабатывается локально на вашем устройстве внутри браузера.',
+    en: '100% Private: camera frames are processed on-device locally via WebGL.',
   };
 
   return (
-    <header className="relative z-30 w-full px-4 py-3 sm:px-6 bg-slate-950/80 backdrop-blur-xl border-b border-slate-800/80 flex items-center justify-between transition-all">
-      {/* Brand */}
-      <div className="flex items-center gap-3">
-        <div className="relative flex items-center justify-center w-10 h-10 rounded-xl bg-gradient-to-tr from-sky-500 via-cyan-400 to-amber-400 p-0.5 shadow-lg shadow-cyan-500/20">
-          <div className="w-full h-full bg-slate-950 rounded-[10px] flex items-center justify-center">
-            <Sparkles className="w-5 h-5 text-cyan-400 animate-pulse" />
+    <header className="absolute top-0 left-0 right-0 z-30 px-3 py-2.5 sm:px-6 flex items-center justify-between bg-gradient-to-b from-slate-950/90 via-slate-950/60 to-transparent backdrop-blur-md">
+      {/* Brand & Mode switch */}
+      <div className="flex items-center gap-2 sm:gap-3">
+        <div className="flex items-center gap-2">
+          <div className="w-8 h-8 rounded-lg bg-gradient-to-tr from-cyan-500 to-amber-400 p-0.5 shadow-md shadow-cyan-500/20">
+            <div className="w-full h-full bg-slate-950 rounded-[7px] flex items-center justify-center">
+              <Sparkles className="w-4 h-4 text-cyan-400" />
+            </div>
           </div>
-          <span className="absolute -bottom-1 -right-1 w-3 h-3 bg-emerald-500 border-2 border-slate-950 rounded-full" />
+          <span className="font-mono font-black text-lg text-transparent bg-clip-text bg-gradient-to-r from-cyan-400 to-amber-300">
+            BulNe?
+          </span>
         </div>
 
-        <div>
-          <div className="flex items-center gap-2">
-            <h1 className="text-xl sm:text-2xl font-black tracking-tight text-white flex items-center gap-1 font-mono">
-              <span className="text-transparent bg-clip-text bg-gradient-to-r from-cyan-400 via-sky-300 to-amber-300">
-                BulNe?
-              </span>
-            </h1>
-            <span className="hidden sm:inline-block text-[11px] font-semibold px-2 py-0.5 rounded-full bg-cyan-950/80 text-cyan-300 border border-cyan-800/60">
-              AI Vision
+        {/* Mode Toggle Pill */}
+        <div className="flex items-center p-0.5 rounded-full bg-slate-900/90 border border-slate-800 backdrop-blur-lg">
+          <button
+            onClick={() => {
+              triggerHaptic('light');
+              setIsGameMode(false);
+            }}
+            className={`flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-bold transition-all cursor-pointer ${
+              !isGameMode
+                ? 'bg-cyan-500 text-slate-950 shadow-sm'
+                : 'text-slate-400 hover:text-white'
+            }`}
+          >
+            <Scan className="w-3.5 h-3.5" />
+            <span className="hidden sm:inline">
+              {language === 'kz' ? 'Сканер' : 'Сканер'}
             </span>
-          </div>
-          <p className="text-[11px] sm:text-xs text-slate-400 font-medium tracking-wide">
-            {titles[language].subtitle}
-          </p>
+          </button>
+
+          <button
+            onClick={() => {
+              triggerHaptic('medium');
+              setIsGameMode(true);
+            }}
+            className={`flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-bold transition-all cursor-pointer ${
+              isGameMode
+                ? 'bg-amber-400 text-slate-950 shadow-sm'
+                : 'text-slate-400 hover:text-amber-300'
+            }`}
+          >
+            <Gamepad2 className="w-3.5 h-3.5" />
+            <span>{language === 'kz' ? 'Тапқыр' : 'Игра'}</span>
+          </button>
         </div>
       </div>
 
-      {/* Right Actions */}
-      <div className="flex items-center gap-2 sm:gap-3">
-        {/* Security indicator */}
-        <div className="relative">
-          <button
-            onClick={() => setShowSecurityTooltip(!showSecurityTooltip)}
-            onMouseEnter={() => setShowSecurityTooltip(true)}
-            onMouseLeave={() => setShowSecurityTooltip(false)}
-            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-emerald-950/40 border border-emerald-700/50 text-emerald-400 hover:bg-emerald-900/40 text-xs font-medium transition cursor-pointer"
-            title="Privacy & Security"
-          >
-            <ShieldCheck className="w-4 h-4 text-emerald-400" />
-            <span className="hidden md:inline">{titles[language].secure}</span>
-            <HelpCircle className="w-3 h-3 text-emerald-500/70 hidden sm:inline" />
-          </button>
-
-          {showSecurityTooltip && (
-            <div className="absolute right-0 top-full mt-2 w-72 p-3 bg-slate-900/95 border border-slate-700 rounded-xl shadow-2xl backdrop-blur-md text-xs text-slate-300 z-50 animate-in fade-in zoom-in-95">
-              <div className="flex items-center gap-2 text-emerald-400 font-semibold mb-1">
-                <ShieldCheck className="w-4 h-4" />
-                <span>{titles[language].secure}</span>
-              </div>
-              <p className="leading-relaxed">{securityInfo[language]}</p>
-            </div>
-          )}
-        </div>
-
-        {/* Language selector */}
+      {/* Right controls */}
+      <div className="flex items-center gap-1.5 sm:gap-2">
+        {/* Language segmented selector */}
         <div className="flex items-center p-0.5 bg-slate-900/90 rounded-lg border border-slate-800">
           {(['kz', 'ru', 'en'] as SupportedLanguage[]).map((lang) => (
             <button
               key={lang}
-              onClick={() => setLanguage(lang)}
-              className={`px-2 py-1 text-xs font-semibold uppercase rounded-md transition-all cursor-pointer ${
+              onClick={() => {
+                triggerHaptic('light');
+                setLanguage(lang);
+              }}
+              className={`px-1.5 sm:px-2 py-0.5 sm:py-1 text-[11px] sm:text-xs font-bold uppercase rounded-md transition-all cursor-pointer ${
                 language === lang
-                  ? 'bg-gradient-to-r from-cyan-500 to-sky-500 text-slate-950 font-bold shadow-sm'
+                  ? 'bg-cyan-500 text-slate-950 font-black'
                   : 'text-slate-400 hover:text-white'
               }`}
             >
@@ -107,37 +107,63 @@ export const Header: React.FC<HeaderProps> = ({
           ))}
         </div>
 
+        {/* Security badge */}
+        <button
+          onClick={() => setShowSecurityTooltip(!showSecurityTooltip)}
+          className="p-2 rounded-lg bg-slate-900/80 border border-slate-800 text-emerald-400 hover:bg-slate-800 transition cursor-pointer"
+          title="Privacy"
+        >
+          <ShieldCheck className="w-4 h-4" />
+        </button>
+
+        {showSecurityTooltip && (
+          <div className="absolute right-4 top-14 w-64 p-3 bg-slate-900/95 border border-slate-700 rounded-xl shadow-2xl text-xs text-slate-300 z-50">
+            <p>{securityInfo[language]}</p>
+          </div>
+        )}
+
         {/* Mute button */}
         <button
-          onClick={() => setIsMuted(!isMuted)}
+          onClick={() => {
+            triggerHaptic('light');
+            setIsMuted(!isMuted);
+          }}
           className={`p-2 rounded-lg border transition cursor-pointer ${
             isMuted
-              ? 'bg-red-950/40 border-red-800/60 text-red-400 hover:bg-red-900/40'
-              : 'bg-slate-900 border-slate-800 text-cyan-400 hover:bg-slate-800'
+              ? 'bg-red-950/50 border-red-800 text-red-400'
+              : 'bg-slate-900/80 border-slate-800 text-cyan-400'
           }`}
-          title={isMuted ? 'Дауысты қосу / Включить звук' : 'Дауысты өшіру / Выключить звук'}
+          title="Звук"
         >
           {isMuted ? <VolumeX className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />}
         </button>
 
-        {/* History button */}
-        <button
-          onClick={onOpenHistory}
-          className="relative p-2 rounded-lg bg-slate-900 border border-slate-800 text-slate-300 hover:text-white hover:bg-slate-800 transition cursor-pointer"
-          title="Тарих / История сканирований"
-        >
-          <History className="w-4 h-4" />
-          {historyCount > 0 && (
-            <span className="absolute -top-1 -right-1 px-1.5 py-0.2 bg-cyan-500 text-slate-950 font-bold text-[10px] rounded-full min-w-4 text-center">
-              {historyCount}
-            </span>
-          )}
-        </button>
+        {/* History */}
+        {!isGameMode && (
+          <button
+            onClick={() => {
+              triggerHaptic('light');
+              onOpenHistory();
+            }}
+            className="relative p-2 rounded-lg bg-slate-900/80 border border-slate-800 text-slate-300 hover:text-white transition cursor-pointer"
+            title="Тарих / История"
+          >
+            <History className="w-4 h-4" />
+            {historyCount > 0 && (
+              <span className="absolute -top-1 -right-1 px-1 py-0.2 bg-cyan-400 text-slate-950 font-black text-[9px] rounded-full min-w-3.5 text-center">
+                {historyCount}
+              </span>
+            )}
+          </button>
+        )}
 
-        {/* Settings button */}
+        {/* Settings */}
         <button
-          onClick={onOpenSettings}
-          className="p-2 rounded-lg bg-slate-900 border border-slate-800 text-slate-300 hover:text-white hover:bg-slate-800 transition cursor-pointer"
+          onClick={() => {
+            triggerHaptic('light');
+            onOpenSettings();
+          }}
+          className="p-2 rounded-lg bg-slate-900/80 border border-slate-800 text-slate-300 hover:text-white transition cursor-pointer"
           title="Баптаулар / Настройки"
         >
           <Settings className="w-4 h-4" />

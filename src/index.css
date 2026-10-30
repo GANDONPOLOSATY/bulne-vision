@@ -71,3 +71,27 @@
 ::-webkit-scrollbar-thumb:hover {
   background: rgba(56, 189, 248, 0.5);
 }
+
+/* Hide scrollbar for clean horizontal chip scroll */
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+/* Mobile Safe Areas & Ergonomics */
+.pb-safe {
+  padding-bottom: max(0.85rem, env(safe-area-inset-bottom, 0.85rem));
+}
+
+.pt-safe {
+  padding-top: max(0.6rem, env(safe-area-inset-top, 0.6rem));
+}
+
+/* Prevent double-tap zoom delay on action buttons */
+button {
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}

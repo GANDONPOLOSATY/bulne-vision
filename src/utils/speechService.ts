@@ -85,6 +85,11 @@ export function stopSpeaking() {
 async function speakWithElevenLabs(text: string, apiKey: string, voiceId: string): Promise<boolean> {
   try {
     stopSpeaking();
+
+  // Mobile audio safety
+  if (window.speechSynthesis.paused) {
+    window.speechSynthesis.resume();
+  }
     const response = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`, {
       method: 'POST',
       headers: {
@@ -149,6 +154,11 @@ export async function speakText(
   }
 
   stopSpeaking();
+
+  // Mobile audio safety
+  if (window.speechSynthesis.paused) {
+    window.speechSynthesis.resume();
+  }
 
   const utterance = new SpeechSynthesisUtterance(text);
   utterance.rate = settings.rate;

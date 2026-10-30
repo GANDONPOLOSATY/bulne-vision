@@ -2,7 +2,7 @@
 
 let audioCtx: AudioContext | null = null;
 
-function getAudioContext(): AudioContext {
+export function getAudioContext(): AudioContext {
   if (!audioCtx) {
     const AudioContextClass = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
     audioCtx = new AudioContextClass();
@@ -13,12 +13,29 @@ function getAudioContext(): AudioContext {
   return audioCtx;
 }
 
+// User-gesture unlock for iOS Safari / Mobile Chrome
+export function unlockAudio() {
+  try {
+    const ctx = getAudioContext();
+    if (ctx.state === 'suspended') {
+      ctx.resume();
+    }
+    // Also unlock SpeechSynthesis with silent utterance if needed
+    if (typeof window !== 'undefined' && window.speechSynthesis) {
+      if (window.speechSynthesis.paused) {
+        window.speechSynthesis.resume();
+      }
+    }
+  } catch {
+    // Ignore
+  }
+}
+
 export function playDetectionChime() {
   try {
     const ctx = getAudioContext();
     const now = ctx.currentTime;
 
-    // Harmonic double ping: 880Hz (A5) then 1320Hz (E6)
     const osc1 = ctx.createOscillator();
     const osc2 = ctx.createOscillator();
     const gainNode = ctx.createGain();
@@ -42,7 +59,7 @@ export function playDetectionChime() {
     osc2.start(now + 0.08);
     osc2.stop(now + 0.35);
   } catch {
-    // Ignore audio context errors if browser blocks autoplay
+    // Ignore
   }
 }
 
@@ -51,7 +68,6 @@ export function playShutterSound() {
     const ctx = getAudioContext();
     const now = ctx.currentTime;
 
-    // Filtered noise pulse simulating a camera shutter click
     const bufferSize = ctx.sampleRate * 0.05;
     const buffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
     const output = buffer.getChannelData(0);
@@ -76,6 +92,34 @@ export function playShutterSound() {
     gainNode.connect(ctx.destination);
 
     whiteNoise.start(now);
+  } catch {
+    // Ignore
+  }
+}
+
+// Victory fanfare for game mode
+export function playTriumphSound() {
+  try {
+    const ctx = getAudioContext();
+    const now = ctx.currentTime;
+
+    const notes = [523.25, 659.25, 783.99, 1046.50]; // C5, E5, G5, C6
+    notes.forEach((freq, idx) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+
+      osc.type = 'triangle';
+      osc.frequency.setValueAtTime(freq, now + idx * 0.09);
+
+      gain.gain.setValueAtTime(0.1, now + idx * 0.09);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + idx * 0.09 + 0.25);
+
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+
+      osc.start(now + idx * 0.09);
+      osc.stop(now + idx * 0.09 + 0.25);
+    });
   } catch {
     // Ignore
   }

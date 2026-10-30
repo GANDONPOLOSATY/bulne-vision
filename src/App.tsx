@@ -62,6 +62,7 @@ export function App() {
     'Модель жүктелуде... / Загрузка модели...'
   );
   const [isSpeaking, setIsSpeaking] = useState(false);
+  const [isFrozen, setIsFrozen] = useState(false);
 
   // Game Mode state
   const [isGameMode, setIsGameMode] = useState(false);
@@ -129,7 +130,7 @@ export function App() {
 
   // Trigger speech for primary detection
   const speakDetection = useCallback(
-    async (detection: DetectionResult, force = false) => {
+    async (detection: DetectionResult, force = false, rate?: number) => {
       if (isMuted) return;
 
       const phrase =
@@ -143,12 +144,27 @@ export function App() {
       await speakText(
         phrase,
         { ...speechSettings, language },
-        { force, debounceMs: 6500 }
+        { force, debounceMs: 6500, rate }
       );
       setIsSpeaking(false);
     },
     [isMuted, language, speechSettings]
   );
+
+  const handleToggleFreeze = () => {
+    triggerHaptic('medium');
+    if (!isFrozen) {
+      if (videoRef.current) {
+        videoRef.current.pause();
+      }
+      setIsFrozen(true);
+    } else {
+      if (videoRef.current) {
+        videoRef.current.play();
+      }
+      setIsFrozen(false);
+    }
+  };
 
   // Initialize or change Quest in Game Mode
   const initNextQuest = useCallback((exclude?: string) => {
@@ -226,17 +242,12 @@ export function App() {
             }
           }
 
-          // Scanner Mode standard action
+          // Scanner Mode
           if (!isGameMode) {
-            const nowStr = new Date().toLocaleTimeString([], {
-              hour: '2-digit',
-              minute: '2-digit',
-              second: '2-digit',
-            });
+            const nowStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
             setHistory((prev) => {
-              const last = prev[0];
-              if (last && last.detection.class === top.class) {
+              if (prev.length > 0 && prev[0].detection.class === top.class) {
                 return prev;
               }
               return [
@@ -284,20 +295,22 @@ export function App() {
 
   // Auto-scan loop
   useEffect(() => {
-    isLoopActive.current = (isAutoScan || isGameMode) && !staticImageUrl && !modelLoadingStatus;
+    isLoopActive.current =
+      (isAutoScan || isGameMode) && !staticImageUrl && !modelLoadingStatus && !isFrozen;
 
     const interval = setInterval(() => {
       if (
         isLoopActive.current &&
         videoRef.current &&
-        videoRef.current.readyState >= 2
+        videoRef.current.readyState >= 2 &&
+        !isFrozen
       ) {
         processFrame(videoRef.current, false);
       }
     }, 850);
 
     return () => clearInterval(interval);
-  }, [isAutoScan, isGameMode, staticImageUrl, modelLoadingStatus, processFrame]);
+  }, [isAutoScan, isGameMode, staticImageUrl, modelLoadingStatus, isFrozen, processFrame]);
 
   const handleManualScan = async () => {
     playShutterSound();
@@ -314,9 +327,9 @@ export function App() {
     setIsDetecting(false);
   };
 
-  const handleReplayCurrent = () => {
+  const handleReplayCurrent = (rate?: number) => {
     if (primaryDetection) {
-      speakDetection(primaryDetection, true);
+      speakDetection(primaryDetection, true, rate);
     }
   };
 
@@ -376,6 +389,7 @@ export function App() {
           videoRef={videoRef}
           canvasRef={canvasRef}
           detections={detections}
+          selectedDetection={primaryDetection}
           language={language}
           isScanning={isAutoScan || isGameMode}
           onOpenSampleModal={() => setIsSampleModalOpen(true)}
@@ -387,6 +401,8 @@ export function App() {
             speakDetection(det, true);
           }}
           isGameMode={isGameMode}
+          isFrozen={isFrozen}
+          onToggleFreeze={handleToggleFreeze}
         />
       </div>
 
@@ -428,6 +444,11 @@ export function App() {
         {!isGameMode && (
           <IdentificationCard
             detection={primaryDetection}
+            allDetections={detections}
+            onSelectDetection={(det) => {
+              setPrimaryDetection(det);
+              speakDetection(det, true);
+            }}
             language={language}
             onReplaySpeech={handleReplayCurrent}
             isSpeaking={isSpeaking}

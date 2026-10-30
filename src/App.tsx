@@ -4,6 +4,7 @@ import { Header } from './components/Header';
 import { CameraView } from './components/CameraView';
 import { IdentificationCard } from './components/IdentificationCard';
 import { ControlsDeck } from './components/ControlsDeck';
+import { GameHUD } from './components/GameHUD';
 import { HistoryDrawer, type HistoryItem } from './components/HistoryDrawer';
 import { SettingsModal } from './components/SettingsModal';
 import { SampleGalleryModal } from './components/SampleGalleryModal';
@@ -20,8 +21,20 @@ import {
   speakText,
   stopSpeaking,
 } from './utils/speechService';
-import { playDetectionChime, playShutterSound } from './utils/audioSynth';
-import { Sparkles, Loader2 } from 'lucide-react';
+import {
+  playDetectionChime,
+  playShutterSound,
+  playTriumphSound,
+  unlockAudio,
+} from './utils/audioSynth';
+import {
+  type Quest,
+  getRandomQuest,
+  getQuestPrompt,
+  getSuccessMessage,
+} from './utils/gameService';
+import { triggerHaptic } from './utils/haptics';
+import { Loader2 } from 'lucide-react';
 
 export function App() {
   // App state
@@ -38,11 +51,11 @@ export function App() {
     }
     return {
       ...DEFAULT_SPEECH_SETTINGS,
-      elevenLabsApiKey: 'sk_b3a712c6f43f7255a1fb17102a84c8966619e8226017ba33', // Default loaded from workspace env
+      elevenLabsApiKey: 'sk_b3a712c6f43f7255a1fb17102a84c8966619e8226017ba33',
     };
   });
 
-  const [confidenceThreshold, setConfidenceThreshold] = useState(0.5);
+  const [confidenceThreshold, setConfidenceThreshold] = useState(0.45);
   const [isAutoScan, setIsAutoScan] = useState(true);
   const [isDetecting, setIsDetecting] = useState(false);
   const [modelLoadingStatus, setModelLoadingStatus] = useState<string | null>(
@@ -50,13 +63,20 @@ export function App() {
   );
   const [isSpeaking, setIsSpeaking] = useState(false);
 
+  // Game Mode state
+  const [isGameMode, setIsGameMode] = useState(false);
+  const [currentQuest, setCurrentQuest] = useState<Quest | null>(null);
+  const [score, setScore] = useState(0);
+  const [streak, setStreak] = useState(1);
+  const [isWon, setIsWon] = useState(false);
+
   // Detections & View state
   const [detections, setDetections] = useState<DetectionResult[]>([]);
   const [primaryDetection, setPrimaryDetection] = useState<DetectionResult | null>(null);
   const [history, setHistory] = useState<HistoryItem[]>([]);
   const [staticImageUrl, setStaticImageUrl] = useState<string | null>(null);
 
-  // Modals & Drawers
+  // Modals
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isHistoryOpen, setIsHistoryOpen] = useState(false);
   const [isSampleModalOpen, setIsSampleModalOpen] = useState(false);
@@ -92,6 +112,21 @@ export function App() {
     };
   }, []);
 
+  // Unlock audio on first global touch
+  useEffect(() => {
+    const handleFirstTouch = () => {
+      unlockAudio();
+      window.removeEventListener('touchstart', handleFirstTouch);
+      window.removeEventListener('click', handleFirstTouch);
+    };
+    window.addEventListener('touchstart', handleFirstTouch, { passive: true });
+    window.addEventListener('click', handleFirstTouch);
+    return () => {
+      window.removeEventListener('touchstart', handleFirstTouch);
+      window.removeEventListener('click', handleFirstTouch);
+    };
+  }, []);
+
   // Trigger speech for primary detection
   const speakDetection = useCallback(
     async (detection: DetectionResult, force = false) => {
@@ -108,11 +143,59 @@ export function App() {
       await speakText(
         phrase,
         { ...speechSettings, language },
-        { force, debounceMs: 7000 }
+        { force, debounceMs: 6500 }
       );
       setIsSpeaking(false);
     },
     [isMuted, language, speechSettings]
+  );
+
+  // Initialize or change Quest in Game Mode
+  const initNextQuest = useCallback((exclude?: string) => {
+    const q = getRandomQuest(exclude);
+    setCurrentQuest(q);
+    setIsWon(false);
+
+    if (!isMuted) {
+      const prompt = getQuestPrompt(q, language);
+      speakText(prompt.spoken, { ...speechSettings, language }, { force: true });
+    }
+  }, [language, isMuted, speechSettings]);
+
+  useEffect(() => {
+    if (isGameMode && !currentQuest) {
+      initNextQuest();
+    }
+  }, [isGameMode, currentQuest, initNextQuest]);
+
+  // Process game victory
+  const handleGameMatch = useCallback(
+    async (matchedQuest: Quest) => {
+      if (isWon) return;
+      setIsWon(true);
+      triggerHaptic('success');
+      playTriumphSound();
+
+      confetti({
+        particleCount: 70,
+        spread: 80,
+        origin: { y: 0.6 },
+        colors: ['#00e5ff', '#fbbf24', '#34d399', '#f43f5e'],
+      });
+
+      setScore((prev) => prev + matchedQuest.points * streak);
+      setStreak((prev) => prev + 1);
+
+      if (!isMuted) {
+        const msg = getSuccessMessage(matchedQuest, language);
+        speakText(msg, { ...speechSettings, language }, { force: true });
+      }
+
+      setTimeout(() => {
+        initNextQuest(matchedQuest.targetId);
+      }, 2600);
+    },
+    [isWon, streak, isMuted, language, speechSettings, initNextQuest]
   );
 
   // Process frame detection
@@ -129,42 +212,57 @@ export function App() {
           const top = results[0];
           setPrimaryDetection(top);
 
-          // Add to history
-          const nowStr = new Date().toLocaleTimeString([], {
-            hour: '2-digit',
-            minute: '2-digit',
-            second: '2-digit',
-          });
+          // Check Game Mode target match
+          if (isGameMode && currentQuest && !isWon) {
+            const hasTarget = results.some((d) => {
+              const normClass = d.class.toLowerCase().replace(/\s+/g, '_');
+              const targetNorm = currentQuest.targetId.toLowerCase().replace(/\s+/g, '_');
+              return normClass === targetNorm || d.knowledge.id === targetNorm;
+            });
 
-          setHistory((prev) => {
-            // Avoid adding identical consecutive item within 5 seconds
-            const last = prev[0];
-            if (last && last.detection.class === top.class) {
-              return prev;
+            if (hasTarget) {
+              handleGameMatch(currentQuest);
+              return;
             }
-            return [
-              {
-                id: `${top.class}_${Date.now()}`,
-                timestamp: nowStr,
-                detection: top,
-              },
-              ...prev.slice(0, 49),
-            ];
-          });
-
-          playDetectionChime();
-
-          if (isManual || isAutoScan) {
-            speakDetection(top, isManual);
           }
 
-          if (isManual) {
-            confetti({
-              particleCount: 40,
-              spread: 60,
-              origin: { y: 0.8 },
-              colors: ['#00e5ff', '#38bdf8', '#f59e0b'],
+          // Scanner Mode standard action
+          if (!isGameMode) {
+            const nowStr = new Date().toLocaleTimeString([], {
+              hour: '2-digit',
+              minute: '2-digit',
+              second: '2-digit',
             });
+
+            setHistory((prev) => {
+              const last = prev[0];
+              if (last && last.detection.class === top.class) {
+                return prev;
+              }
+              return [
+                {
+                  id: `${top.class}_${Date.now()}`,
+                  timestamp: nowStr,
+                  detection: top,
+                },
+                ...prev.slice(0, 49),
+              ];
+            });
+
+            playDetectionChime();
+
+            if (isManual || isAutoScan) {
+              speakDetection(top, isManual);
+            }
+
+            if (isManual) {
+              confetti({
+                particleCount: 40,
+                spread: 60,
+                origin: { y: 0.8 },
+                colors: ['#00e5ff', '#38bdf8', '#f59e0b'],
+              });
+            }
           }
         }
       } catch (err) {
@@ -173,12 +271,20 @@ export function App() {
         detectionLock.current = false;
       }
     },
-    [confidenceThreshold, isAutoScan, speakDetection]
+    [
+      confidenceThreshold,
+      isAutoScan,
+      isGameMode,
+      currentQuest,
+      isWon,
+      handleGameMatch,
+      speakDetection,
+    ]
   );
 
-  // Auto-scan loop for live video
+  // Auto-scan loop
   useEffect(() => {
-    isLoopActive.current = isAutoScan && !staticImageUrl && !modelLoadingStatus;
+    isLoopActive.current = (isAutoScan || isGameMode) && !staticImageUrl && !modelLoadingStatus;
 
     const interval = setInterval(() => {
       if (
@@ -191,9 +297,8 @@ export function App() {
     }, 850);
 
     return () => clearInterval(interval);
-  }, [isAutoScan, staticImageUrl, modelLoadingStatus, processFrame]);
+  }, [isAutoScan, isGameMode, staticImageUrl, modelLoadingStatus, processFrame]);
 
-  // Manual Trigger: User taps the shutter button "Бұл не? Сканерлеу"
   const handleManualScan = async () => {
     playShutterSound();
     setIsDetecting(true);
@@ -209,14 +314,12 @@ export function App() {
     setIsDetecting(false);
   };
 
-  // Replay speech for currently locked object
   const handleReplayCurrent = () => {
     if (primaryDetection) {
       speakDetection(primaryDetection, true);
     }
   };
 
-  // Select sample image from gallery
   const handleSelectSample = (sample: SampleImage) => {
     setStaticImageUrl(sample.src);
     setTimeout(() => {
@@ -227,7 +330,6 @@ export function App() {
     }, 200);
   };
 
-  // Upload local photo file
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
@@ -254,8 +356,8 @@ export function App() {
   };
 
   return (
-    <div className="min-h-screen bg-[#070a12] text-slate-100 flex flex-col selection:bg-cyan-500 selection:text-slate-950">
-      {/* Top Navigation */}
+    <div className="fixed inset-0 w-full h-[100dvh] bg-[#070a12] text-slate-100 overflow-hidden select-none flex flex-col justify-between">
+      {/* Top Header Floating Bar */}
       <Header
         language={language}
         setLanguage={setLanguage}
@@ -264,43 +366,75 @@ export function App() {
         onOpenSettings={() => setIsSettingsOpen(true)}
         onOpenHistory={() => setIsHistoryOpen(true)}
         historyCount={history.length}
+        isGameMode={isGameMode}
+        setIsGameMode={setIsGameMode}
       />
 
-      {/* Main Vision Workspace */}
-      <main className="flex-1 max-w-6xl w-full mx-auto p-4 sm:p-6 flex flex-col justify-start">
-        {/* Loading overlay for AI model */}
-        {modelLoadingStatus && (
-          <div className="w-full max-w-4xl mx-auto mb-4 p-4 rounded-xl bg-slate-900/90 border border-cyan-500/30 flex items-center justify-between text-xs sm:text-sm text-cyan-300 backdrop-blur-md animate-pulse">
-            <div className="flex items-center gap-3">
-              <Loader2 className="w-5 h-5 animate-spin text-cyan-400" />
-              <span>{modelLoadingStatus}</span>
-            </div>
-            <span className="font-mono text-[11px] text-slate-400">COCO-SSD • TFJS</span>
-          </div>
-        )}
-
-        {/* Viewfinder Section */}
+      {/* Fullscreen Camera Layer */}
+      <div className="absolute inset-0 w-full h-full z-0">
         <CameraView
           videoRef={videoRef}
           canvasRef={canvasRef}
           detections={detections}
           language={language}
-          isScanning={isAutoScan}
+          isScanning={isAutoScan || isGameMode}
           onOpenSampleModal={() => setIsSampleModalOpen(true)}
           onFileUpload={handleFileUpload}
           staticImageUrl={staticImageUrl}
           onClearStaticImage={clearStaticImage}
+          onSelectDetection={(det) => {
+            setPrimaryDetection(det);
+            speakDetection(det, true);
+          }}
+          isGameMode={isGameMode}
         />
+      </div>
 
-        {/* Identification Result Card */}
-        <IdentificationCard
-          detection={primaryDetection}
+      {/* Model Loading Status Pill */}
+      {modelLoadingStatus && (
+        <div className="absolute top-16 left-4 right-4 z-20 max-w-sm mx-auto p-2.5 rounded-full bg-slate-950/80 border border-cyan-500/40 backdrop-blur-xl flex items-center justify-center gap-2 text-xs text-cyan-300 shadow-xl">
+          <Loader2 className="w-4 h-4 animate-spin text-cyan-400" />
+          <span>{modelLoadingStatus}</span>
+        </div>
+      )}
+
+      {/* Game Mode Quest HUD */}
+      {isGameMode && (
+        <GameHUD
+          quest={currentQuest}
+          score={score}
+          streak={streak}
+          onSkipQuest={() => {
+            setStreak(1);
+            initNextQuest(currentQuest?.targetId);
+          }}
+          onPlayQuestPrompt={() => {
+            if (currentQuest) {
+              const p = getQuestPrompt(currentQuest, language);
+              speakText(p.spoken, { ...speechSettings, language }, { force: true });
+            }
+          }}
           language={language}
-          onReplaySpeech={handleReplayCurrent}
-          isSpeaking={isSpeaking}
+          isWon={isWon}
         />
+      )}
 
-        {/* Control Deck */}
+      {/* Spacer to push controls to bottom */}
+      <div className="flex-1 pointer-events-none" />
+
+      {/* Bottom Floating Control Dock */}
+      <div className="relative z-20 w-full flex flex-col items-center gap-2 pb-safe">
+        {/* Identified Object Card (Scanner Mode only) */}
+        {!isGameMode && (
+          <IdentificationCard
+            detection={primaryDetection}
+            language={language}
+            onReplaySpeech={handleReplayCurrent}
+            isSpeaking={isSpeaking}
+          />
+        )}
+
+        {/* Tactile Control Buttons */}
         <ControlsDeck
           onScanNow={handleManualScan}
           isAutoScan={isAutoScan}
@@ -312,10 +446,11 @@ export function App() {
           }}
           language={language}
           isDetecting={isDetecting}
+          isGameMode={isGameMode}
         />
-      </main>
+      </div>
 
-      {/* Modals and Drawers */}
+      {/* Drawers and Modals */}
       <HistoryDrawer
         isOpen={isHistoryOpen}
         onClose={() => setIsHistoryOpen(false)}
@@ -340,17 +475,6 @@ export function App() {
         onSelectSample={handleSelectSample}
         language={language}
       />
-
-      {/* Footer */}
-      <footer className="w-full py-4 text-center text-xs text-slate-500 border-t border-slate-900 bg-slate-950/40">
-        <div className="flex items-center justify-center gap-2">
-          <span>BulNe? — Ақылды көру және сөйлеу жүйесі</span>
-          <span>•</span>
-          <span className="text-cyan-400 flex items-center gap-1">
-            <Sparkles className="w-3.5 h-3.5" /> 100% Локальді & Қауіпсіз
-          </span>
-        </div>
-      </footer>
     </div>
   );
 }

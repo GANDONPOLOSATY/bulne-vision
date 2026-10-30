@@ -9,7 +9,6 @@ import {
   Upload,
   Image as ImageIcon,
   Crosshair,
-  ZoomIn,
   Pause,
   Play,
 } from 'lucide-react';
@@ -124,9 +123,10 @@ export const CameraView: React.FC<CameraViewProps> = ({
     if (!staticImageUrl) {
       startCamera();
     }
+    const currentVideo = videoRef.current;
     return () => {
-      if (videoRef.current && videoRef.current.srcObject) {
-        const stream = videoRef.current.srcObject as MediaStream;
+      if (currentVideo && currentVideo.srcObject) {
+        const stream = currentVideo.srcObject as MediaStream;
         stream.getTracks().forEach((t) => t.stop());
       }
     };

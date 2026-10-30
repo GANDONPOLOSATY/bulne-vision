@@ -75,7 +75,7 @@ export function drawHUDOverlay(
   canvas: HTMLCanvasElement,
   detections: DetectionResult[],
   activeLang: 'kz' | 'ru' | 'en',
-  options?: { showLabels?: boolean }
+  options?: { showLabels?: boolean; selectedDetection?: DetectionResult | null }
 ) {
   const ctx = canvas.getContext('2d');
   if (!ctx) return;
@@ -83,12 +83,18 @@ export function drawHUDOverlay(
   ctx.clearRect(0, 0, canvas.width, canvas.height);
 
   const showLabels = options?.showLabels ?? true;
+  const selected = options?.selectedDetection;
 
   detections.forEach((det, index) => {
     const [x, y, width, height] = det.bbox;
     const scorePct = Math.round(det.score * 100);
 
-    const isPrimary = index === 0; // The highest confidence detection
+    // Primary is either the explicitly selected detection or the first (highest confidence)
+    const isPrimary = selected
+      ? det.class === selected.class &&
+        Math.abs(det.bbox[0] - selected.bbox[0]) < 10 &&
+        Math.abs(det.bbox[1] - selected.bbox[1]) < 10
+      : index === 0;
     const strokeColor = isPrimary ? '#00e5ff' : '#38bdf8';
     const glowColor = isPrimary ? 'rgba(0, 229, 255, 0.5)' : 'rgba(56, 189, 248, 0.3)';
 
@@ -164,37 +170,33 @@ export function drawHUDOverlay(
           ? det.knowledge.ru
           : det.knowledge.en;
 
-      const badgeText = `${labelText} • ${scorePct}%`;
+      ctx.font = '600 13px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+      const textMetrics = ctx.measureText(`${labelText}  ${scorePct}%`);
+      const paddingX = 8;
+      const paddingY = 4;
+      const labelW = textMetrics.width + paddingX * 2;
+      const labelH = 22;
+      const labelX = x;
+      const labelY = Math.max(0, y - labelH - 4);
 
-      ctx.font = '600 13px system-ui, -apple-system, BlinkMacSystemFont, sans-serif';
-      const textMetrics = ctx.measureText(badgeText);
-      const paddingX = 10;
-      const badgeWidth = textMetrics.width + paddingX * 2;
-      const badgeHeight = 24;
-
-      const badgeY = Math.max(10, y - badgeHeight - 6);
-      const badgeX = Math.max(8, Math.min(x, canvas.width - badgeWidth - 8));
-
-      // Badge background pill
-      ctx.shadowBlur = 0;
-      ctx.fillStyle = isPrimary ? 'rgba(6, 18, 36, 0.88)' : 'rgba(15, 23, 42, 0.82)';
-      ctx.strokeStyle = strokeColor;
-      ctx.lineWidth = 1.2;
-
+      // Dark background pill
+      ctx.fillStyle = isPrimary ? 'rgba(7, 10, 18, 0.92)' : 'rgba(15, 23, 42, 0.85)';
       ctx.beginPath();
-      ctx.roundRect(badgeX, badgeY, badgeWidth, badgeHeight, 6);
+      ctx.roundRect(labelX, labelY, labelW, labelH, 6);
       ctx.fill();
+
+      // Border outline
+      ctx.strokeStyle = strokeColor;
+      ctx.lineWidth = 1;
       ctx.stroke();
 
-      // Dot indicator
-      ctx.fillStyle = isPrimary ? '#00e5ff' : '#38bdf8';
-      ctx.beginPath();
-      ctx.arc(badgeX + 9, badgeY + badgeHeight / 2, 3, 0, Math.PI * 2);
-      ctx.fill();
+      // Text label
+      ctx.fillStyle = isPrimary ? '#00e5ff' : '#ffffff';
+      ctx.fillText(labelText, labelX + paddingX, labelY + 15);
 
-      // Text
-      ctx.fillStyle = '#ffffff';
-      ctx.fillText(badgeText, badgeX + 16, badgeY + 16);
+      // Confidence badge
+      ctx.fillStyle = '#38bdf8';
+      ctx.fillText(`${scorePct}%`, labelX + labelW - paddingX - ctx.measureText(`${scorePct}%`).width, labelY + 15);
     }
 
     ctx.restore();

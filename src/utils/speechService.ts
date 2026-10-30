@@ -1,74 +1,47 @@
-// Speech Synthesis Service (Web Speech API + ElevenLabs Multilingual)
-
 export type SupportedLanguage = 'kz' | 'ru' | 'en';
 
 export interface SpeechSettings {
   language: SupportedLanguage;
-  rate: number; // 0.7 to 1.3
-  pitch: number; // 0.8 to 1.2
-  volume: number; // 0 to 1
-  voiceURI?: string;
+  rate: number;
+  pitch: number;
+  volume: number;
   useElevenLabs: boolean;
   elevenLabsApiKey?: string;
-  elevenLabsVoiceId?: string; // default e.g. "21m00Tcm4TlvDq8ikWAM" (Rachel) or "pNInz6obpgDQGcFmaJgB" (Adam)
+  elevenLabsVoiceId?: string;
+  voiceURI?: string;
 }
-
-let lastSpokenText = '';
-let lastSpokenTime = 0;
-let currentAudio: HTMLAudioElement | null = null;
 
 export const DEFAULT_SPEECH_SETTINGS: SpeechSettings = {
   language: 'kz',
   rate: 1.0,
   pitch: 1.0,
   volume: 1.0,
-  useElevenLabs: false,
-  elevenLabsApiKey: '',
-  elevenLabsVoiceId: '21m00Tcm4TlvDq8ikWAM',
+  useElevenLabs: true, // Default to true using user's ElevenLabs account for ultra-realistic speech
+  elevenLabsVoiceId: '21m00Tcm4TlvDq8ikWAM', // Rachel / Multilingual
 };
 
-// Get available Web Speech voices
-export function getAvailableVoices(): Promise<SpeechSynthesisVoice[]> {
-  return new Promise((resolve) => {
-    if (typeof window === 'undefined' || !window.speechSynthesis) {
-      resolve([]);
-      return;
-    }
+let currentAudio: HTMLAudioElement | null = null;
+let lastSpokenText = '';
+let lastSpokenTime = 0;
 
-    const voices = window.speechSynthesis.getVoices();
-    if (voices.length > 0) {
-      resolve(voices);
-      return;
-    }
+// Best voice heuristic for Kazakh and Russian in Web Speech API
+function findBestVoice(voices: SpeechSynthesisVoice[], lang: SupportedLanguage): SpeechSynthesisVoice | null {
+  if (voices.length === 0) return null;
 
-    window.speechSynthesis.onvoiceschanged = () => {
-      resolve(window.speechSynthesis.getVoices());
-    };
-
-    // Timeout fallback
-    setTimeout(() => {
-      resolve(window.speechSynthesis.getVoices());
-    }, 500);
-  });
-}
-
-// Find optimal voice for selected language
-export function findBestVoice(voices: SpeechSynthesisVoice[], lang: SupportedLanguage): SpeechSynthesisVoice | undefined {
   if (lang === 'kz') {
-    // Try Kazakh first
-    const kzVoice = voices.find(v => v.lang.startsWith('kk') || v.lang.includes('KZ') || v.name.toLowerCase().includes('kazakh'));
-    if (kzVoice) return kzVoice;
-    // Fallback to Russian voice which pronounces Cyrillic Kazakh phonetics well
-    const ruVoice = voices.find(v => v.lang.startsWith('ru') || v.name.toLowerCase().includes('russian'));
-    if (ruVoice) return ruVoice;
+    // Look for kk-KZ or kk voice
+    const kz = voices.find(v => v.lang.startsWith('kk') || v.lang.includes('KZ'));
+    if (kz) return kz;
+    // Kazakh can fallback to Russian phonetics gracefully if no Kazakh TTS engine is installed on device
+    const ru = voices.find(v => v.lang.startsWith('ru'));
+    if (ru) return ru;
   } else if (lang === 'ru') {
-    const ruVoice = voices.find(v => v.lang.startsWith('ru') || v.lang.includes('RU') || v.name.toLowerCase().includes('russian'));
-    if (ruVoice) return ruVoice;
-  } else if (lang === 'en') {
-    const enVoice = voices.find(v => v.lang.startsWith('en') && (v.name.includes('Natural') || v.name.includes('Google') || v.name.includes('Samantha')));
-    if (enVoice) return enVoice;
+    const ru = voices.find(v => v.lang.startsWith('ru') || v.lang.includes('RU'));
+    if (ru) return ru;
   }
-  return voices[0];
+
+  // Fallback to English or default
+  return voices.find(v => v.lang.startsWith('en')) || voices[0] || null;
 }
 
 export function stopSpeaking() {
@@ -77,6 +50,7 @@ export function stopSpeaking() {
   }
   if (currentAudio) {
     currentAudio.pause();
+    currentAudio.currentTime = 0;
     currentAudio = null;
   }
 }
@@ -126,7 +100,7 @@ async function speakWithElevenLabs(text: string, apiKey: string, voiceId: string
 export async function speakText(
   text: string,
   settings: SpeechSettings,
-  options?: { force?: boolean; debounceMs?: number }
+  options?: { force?: boolean; debounceMs?: number; rate?: number }
 ) {
   if (!text || text.trim() === '') return;
 
@@ -161,7 +135,7 @@ export async function speakText(
   }
 
   const utterance = new SpeechSynthesisUtterance(text);
-  utterance.rate = settings.rate;
+  utterance.rate = options?.rate ?? settings.rate;
   utterance.pitch = settings.pitch;
   utterance.volume = settings.volume;
 

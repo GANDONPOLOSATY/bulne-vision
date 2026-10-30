@@ -1,5 +1,18 @@
 import React, { useRef, useEffect, useState, useCallback } from 'react';
-import { Camera, SwitchCamera, Zap, ZapOff, AlertCircle, RefreshCw, Upload, Image as ImageIcon, Crosshair } from 'lucide-react';
+import {
+  Camera,
+  SwitchCamera,
+  Zap,
+  ZapOff,
+  AlertCircle,
+  RefreshCw,
+  Upload,
+  Image as ImageIcon,
+  Crosshair,
+  ZoomIn,
+  Pause,
+  Play,
+} from 'lucide-react';
 import { drawHUDOverlay, type DetectionResult } from '../utils/detectorService';
 import type { SupportedLanguage } from '../utils/speechService';
 import { triggerHaptic } from '../utils/haptics';
@@ -8,6 +21,7 @@ interface CameraViewProps {
   videoRef: React.RefObject<HTMLVideoElement | null>;
   canvasRef: React.RefObject<HTMLCanvasElement | null>;
   detections: DetectionResult[];
+  selectedDetection?: DetectionResult | null;
   language: SupportedLanguage;
   isScanning: boolean;
   onOpenSampleModal: () => void;
@@ -16,12 +30,15 @@ interface CameraViewProps {
   onClearStaticImage: () => void;
   onSelectDetection?: (det: DetectionResult) => void;
   isGameMode?: boolean;
+  isFrozen?: boolean;
+  onToggleFreeze?: () => void;
 }
 
 export const CameraView: React.FC<CameraViewProps> = ({
   videoRef,
   canvasRef,
   detections,
+  selectedDetection,
   language,
   isScanning,
   onOpenSampleModal,
@@ -30,10 +47,13 @@ export const CameraView: React.FC<CameraViewProps> = ({
   onClearStaticImage,
   onSelectDetection,
   isGameMode = false,
+  isFrozen = false,
+  onToggleFreeze,
 }) => {
   const [facingMode, setFacingMode] = useState<'environment' | 'user'>('environment');
   const [hasTorch, setHasTorch] = useState(false);
   const [isTorchOn, setIsTorchOn] = useState(false);
+  const [zoomLevel, setZoomLevel] = useState<1 | 2>(1);
   const [cameraError, setCameraError] = useState<string | null>(null);
   const [isStartingCamera, setIsStartingCamera] = useState(false);
   const [tapFocus, setTapFocus] = useState<{ x: number; y: number } | null>(null);
@@ -136,25 +156,58 @@ export const CameraView: React.FC<CameraViewProps> = ({
     setFacingMode((prev) => (prev === 'environment' ? 'user' : 'environment'));
   };
 
-  // Tap-to-focus on touch/click
+  const toggleZoom = () => {
+    triggerHaptic('light');
+    const nextZoom: 1 | 2 = zoomLevel === 1 ? 2 : 1;
+    setZoomLevel(nextZoom);
+
+    // Attempt hardware zoom if supported
+    if (videoRef.current && videoRef.current.srcObject) {
+      const stream = videoRef.current.srcObject as MediaStream;
+      const track = stream.getVideoTracks()[0];
+      if (track) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const capabilities = (track.getCapabilities && (track.getCapabilities() as any)) || {};
+        if (capabilities.zoom) {
+          try {
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            (track as any).applyConstraints({
+              advanced: [{ zoom: nextZoom === 2 ? Math.min(2, capabilities.zoom.max || 2) : 1 }],
+            });
+          } catch {
+            // fallback to CSS zoom
+          }
+        }
+      }
+    }
+  };
+
+  // Tap-to-focus on touch/click with exact object-cover projection
   const handleViewfinderTap = (e: React.MouseEvent<HTMLDivElement> | React.TouchEvent<HTMLDivElement>) => {
     if (!containerRef.current) return;
     const rect = containerRef.current.getBoundingClientRect();
-    const clientX = 'touches' in e ? e.touches[0].clientX : e.clientX;
-    const clientY = 'touches' in e ? e.touches[0].clientY : e.clientY;
+    const clientX = 'touches' in e ? e.touches[0].clientX : (e as React.MouseEvent).clientX;
+    const clientY = 'touches' in e ? e.touches[0].clientY : (e as React.MouseEvent).clientY;
 
-    const x = clientX - rect.left;
-    const y = clientY - rect.top;
+    const tapX = clientX - rect.left;
+    const tapY = clientY - rect.top;
 
-    setTapFocus({ x, y });
+    setTapFocus({ x: tapX, y: tapY });
     triggerHaptic('light');
 
-    // Check if user tapped inside any bounding box
+    // Project coordinates onto canvas coordinate space
     if (canvasRef.current && detections.length > 0) {
-      const scaleX = canvasRef.current.width / rect.width;
-      const scaleY = canvasRef.current.height / rect.height;
-      const canvasX = x * scaleX;
-      const canvasY = y * scaleY;
+      const cw = canvasRef.current.width || 640;
+      const ch = canvasRef.current.height || 480;
+
+      const scale = Math.max(rect.width / cw, rect.height / ch);
+      const renderedW = cw * scale;
+      const renderedH = ch * scale;
+      const offsetX = (rect.width - renderedW) / 2;
+      const offsetY = (rect.height - renderedH) / 2;
+
+      const canvasX = (tapX - offsetX) / scale;
+      const canvasY = (tapY - offsetY) / scale;
 
       const hit = detections.find((d) => {
         const [bx, by, bw, bh] = d.bbox;
@@ -169,12 +222,14 @@ export const CameraView: React.FC<CameraViewProps> = ({
     setTimeout(() => setTapFocus(null), 1200);
   };
 
-  // Sync canvas dimensions and draw HUD
+  // Sync canvas dimensions and draw HUD overlay
   useEffect(() => {
     if (canvasRef.current && (videoRef.current || staticImageUrl)) {
-      drawHUDOverlay(canvasRef.current, detections, language);
+      drawHUDOverlay(canvasRef.current, detections, language, {
+        selectedDetection,
+      });
     }
-  }, [detections, language, canvasRef, videoRef, staticImageUrl]);
+  }, [detections, language, canvasRef, videoRef, staticImageUrl, selectedDetection]);
 
   return (
     <div
@@ -192,117 +247,172 @@ export const CameraView: React.FC<CameraViewProps> = ({
         className="hidden"
       />
 
-      {/* Static image display mode */}
-      {staticImageUrl ? (
-        <div className="relative w-full h-full flex items-center justify-center bg-black">
-          <img
-            id="bulne-static-img"
-            src={staticImageUrl}
-            alt="Scanned item"
-            className="w-full h-full object-contain"
-            onLoad={() => {
-              const img = document.getElementById('bulne-static-img') as HTMLImageElement;
-              if (img && canvasRef.current) {
-                canvasRef.current.width = img.clientWidth || 640;
-                canvasRef.current.height = img.clientHeight || 480;
+      {/* Video & Canvas Scalable Viewport */}
+      <div
+        className="relative w-full h-full overflow-hidden transition-transform duration-300 ease-out"
+        style={{
+          transform: zoomLevel === 2 ? 'scale(1.8)' : 'scale(1)',
+          transformOrigin: 'center center',
+        }}
+      >
+        {/* Static image display mode */}
+        {staticImageUrl ? (
+          <div className="relative w-full h-full flex items-center justify-center bg-black">
+            <img
+              id="bulne-static-img"
+              src={staticImageUrl}
+              alt="Scanned item"
+              className="w-full h-full object-contain"
+              onLoad={() => {
+                const img = document.getElementById('bulne-static-img') as HTMLImageElement;
+                if (img && canvasRef.current) {
+                  canvasRef.current.width = img.clientWidth || 640;
+                  canvasRef.current.height = img.clientHeight || 480;
+                }
+              }}
+            />
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                onClearStaticImage();
+              }}
+              className="absolute top-4 left-4 z-30 flex items-center gap-2 px-3 py-1.5 rounded-full bg-slate-900/90 text-white border border-slate-700 text-xs font-semibold backdrop-blur-md cursor-pointer transition shadow-lg active:scale-95"
+            >
+              <Camera className="w-4 h-4 text-cyan-400" />
+              <span>{language === 'kz' ? 'Камераны қосу' : 'Включить камеру'}</span>
+            </button>
+          </div>
+        ) : (
+          /* Live Camera Feed */
+          <video
+            ref={videoRef}
+            playsInline
+            muted
+            autoPlay
+            onLoadedMetadata={() => {
+              if (videoRef.current && canvasRef.current) {
+                canvasRef.current.width = videoRef.current.videoWidth || 640;
+                canvasRef.current.height = videoRef.current.videoHeight || 480;
               }
             }}
+            className="w-full h-full object-cover"
           />
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              onClearStaticImage();
-            }}
-            className="absolute top-4 left-4 z-30 flex items-center gap-2 px-3 py-1.5 rounded-full bg-slate-900/90 text-white border border-slate-700 text-xs font-semibold backdrop-blur-md cursor-pointer transition shadow-lg active:scale-95"
-          >
-            <Camera className="w-4 h-4 text-cyan-400" />
-            <span>{language === 'kz' ? 'Камераны қосу' : 'Включить камеру'}</span>
-          </button>
-        </div>
-      ) : (
-        /* Live Camera Feed */
-        <video
-          ref={videoRef}
-          playsInline
-          muted
-          autoPlay
-          onLoadedMetadata={() => {
-            if (videoRef.current && canvasRef.current) {
-              canvasRef.current.width = videoRef.current.videoWidth || 640;
-              canvasRef.current.height = videoRef.current.videoHeight || 480;
-            }
-          }}
-          className="w-full h-full object-cover"
-        />
-      )}
+        )}
 
-      {/* Canvas HUD overlay */}
-      <canvas
-        ref={canvasRef}
-        className="absolute inset-0 w-full h-full pointer-events-none z-10"
-      />
+        {/* Canvas HUD overlay (with object-cover for pixel-perfect alignment) */}
+        <canvas
+          ref={canvasRef}
+          className="absolute inset-0 w-full h-full object-cover pointer-events-none z-10"
+        />
+      </div>
 
       {/* Animated Sci-Fi Scanline Laser */}
-      {isScanning && !cameraError && (
+      {isScanning && !cameraError && !isFrozen && (
         <div className="absolute left-0 right-0 h-0.5 bg-gradient-to-r from-transparent via-cyan-400 to-transparent shadow-[0_0_15px_#22d3ee] animate-scanline pointer-events-none z-10 opacity-70" />
+      )}
+
+      {/* Freeze indicator badge */}
+      {isFrozen && (
+        <div className="absolute top-16 left-1/2 -translate-x-1/2 z-20 flex items-center gap-1.5 px-3 py-1 rounded-full bg-amber-500/90 text-slate-950 font-bold text-xs backdrop-blur-md shadow-lg animate-pulse">
+          <Pause className="w-3.5 h-3.5 fill-current" />
+          <span>{language === 'kz' ? 'Кадр тоқтатылды' : 'Кадр зафиксирован'}</span>
+        </div>
       )}
 
       {/* Tap-to-focus ripple indicator */}
       {tapFocus && (
         <div
           style={{ left: tapFocus.x - 24, top: tapFocus.y - 24 }}
-          className="absolute pointer-events-none z-20 w-12 h-12 rounded-full border-2 border-amber-400 flex items-center justify-center animate-ping"
+          className="absolute pointer-events-none z-20 w-12 h-12 rounded-full border-2 border-cyan-400 flex items-center justify-center animate-ping"
         >
-          <div className="w-2 h-2 rounded-full bg-amber-400" />
+          <div className="w-2 h-2 rounded-full bg-cyan-400" />
         </div>
       )}
 
       {/* Minimalist Viewfinder Reticle Grid */}
       <div className="absolute inset-4 sm:inset-6 pointer-events-none z-10 flex flex-col justify-between">
         <div className="flex justify-between items-start">
-          <div className="w-6 h-6 sm:w-8 sm:h-8 border-t-2 border-l-2 border-cyan-400 rounded-tl-lg shadow-sm shadow-cyan-400/50" />
-          <div className="w-6 h-6 sm:w-8 sm:h-8 border-t-2 border-r-2 border-cyan-400 rounded-tr-lg shadow-sm shadow-cyan-400/50" />
+          <div className="w-6 h-6 sm:w-8 sm:h-8 border-t-2 border-l-2 border-cyan-400/80 rounded-tl-lg shadow-sm shadow-cyan-400/30" />
+          <div className="w-6 h-6 sm:w-8 sm:h-8 border-t-2 border-r-2 border-cyan-400/80 rounded-tr-lg shadow-sm shadow-cyan-400/30" />
         </div>
 
-        <div className="self-center flex items-center justify-center opacity-40">
-          <Crosshair className="w-10 h-10 text-cyan-400 stroke-1" />
+        <div className="self-center flex items-center justify-center opacity-30">
+          <Crosshair className="w-9 h-9 text-cyan-400 stroke-1" />
         </div>
 
         <div className="flex justify-between items-end">
-          <div className="w-6 h-6 sm:w-8 sm:h-8 border-b-2 border-l-2 border-cyan-400 rounded-bl-lg shadow-sm shadow-cyan-400/50" />
-          <div className="w-6 h-6 sm:w-8 sm:h-8 border-b-2 border-r-2 border-cyan-400 rounded-br-lg shadow-sm shadow-cyan-400/50" />
+          <div className="w-6 h-6 sm:w-8 sm:h-8 border-b-2 border-l-2 border-cyan-400/80 rounded-bl-lg shadow-sm shadow-cyan-400/30" />
+          <div className="w-6 h-6 sm:w-8 sm:h-8 border-b-2 border-r-2 border-cyan-400/80 rounded-br-lg shadow-sm shadow-cyan-400/30" />
         </div>
       </div>
 
-      {/* Floating Camera Controls (Flip & Torch) */}
-      <div className="absolute top-20 right-4 z-20 flex flex-col gap-2.5">
+      {/* Floating Camera Controls (Right Thumb-Zone) */}
+      <div className="absolute top-20 right-3.5 z-20 flex flex-col gap-2">
+        {/* Flip Camera */}
         {!staticImageUrl && (
           <button
             onClick={(e) => {
               e.stopPropagation();
               switchCameraFacing();
             }}
-            className="p-3 rounded-full bg-slate-900/80 hover:bg-slate-800 border border-slate-700/80 text-white backdrop-blur-xl shadow-lg active:scale-90 transition cursor-pointer"
-            title="Камераны ауыстыру / Сменить камеру"
+            className="p-2.5 sm:p-3 rounded-full bg-slate-900/80 hover:bg-slate-800 border border-slate-700/80 text-white backdrop-blur-xl shadow-lg active:scale-90 transition cursor-pointer"
+            title={language === 'kz' ? 'Камераны ауыстыру' : 'Сменить камеру'}
           >
             <SwitchCamera className="w-5 h-5 text-cyan-300" />
           </button>
         )}
 
+        {/* Zoom (1x / 2x) */}
+        {!staticImageUrl && (
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              toggleZoom();
+            }}
+            className={`p-2.5 sm:p-3 rounded-full border backdrop-blur-xl shadow-lg active:scale-90 transition cursor-pointer font-mono text-xs font-black ${
+              zoomLevel === 2
+                ? 'bg-cyan-500 border-cyan-300 text-slate-950'
+                : 'bg-slate-900/80 border-slate-700/80 text-cyan-300 hover:bg-slate-800'
+            }`}
+            title="Масштаб (1x / 2x)"
+          >
+            {zoomLevel === 2 ? '2x' : '1x'}
+          </button>
+        )}
+
+        {/* Torch */}
         {hasTorch && (
           <button
             onClick={(e) => {
               e.stopPropagation();
               toggleTorch();
             }}
-            className={`p-3 rounded-full border backdrop-blur-xl shadow-lg active:scale-90 transition cursor-pointer ${
+            className={`p-2.5 sm:p-3 rounded-full border backdrop-blur-xl shadow-lg active:scale-90 transition cursor-pointer ${
               isTorchOn
                 ? 'bg-amber-500 border-amber-400 text-slate-950'
                 : 'bg-slate-900/80 border-slate-700/80 text-white hover:bg-slate-800'
             }`}
-            title="Фонарик"
+            title={language === 'kz' ? 'Фонарик' : 'Фонарик'}
           >
             {isTorchOn ? <Zap className="w-5 h-5 fill-current" /> : <ZapOff className="w-5 h-5" />}
+          </button>
+        )}
+
+        {/* Freeze / Snapshot pause */}
+        {onToggleFreeze && !staticImageUrl && (
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onToggleFreeze();
+            }}
+            className={`p-2.5 sm:p-3 rounded-full border backdrop-blur-xl shadow-lg active:scale-90 transition cursor-pointer ${
+              isFrozen
+                ? 'bg-amber-400 border-amber-300 text-slate-950'
+                : 'bg-slate-900/80 border-slate-700/80 text-slate-300 hover:bg-slate-800'
+            }`}
+            title={language === 'kz' ? 'Кадрды тоқтату / жалғастыру' : 'Зафиксировать кадр'}
+          >
+            {isFrozen ? <Play className="w-5 h-5 fill-current" /> : <Pause className="w-5 h-5" />}
           </button>
         )}
       </div>
